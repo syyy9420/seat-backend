@@ -1,0 +1,7 @@
+/target/
+**/*.db
+**/*.db-journal
+.idea/
+.vscode/
+*.swp
+*.pdb
