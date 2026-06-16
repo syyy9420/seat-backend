@@ -4,6 +4,7 @@ mod user_handler;
 
 use actix_web::{web, App, HttpServer, HttpResponse, Responder};
 use std::sync::Mutex;
+use actix_cors::Cors;
 // use rusqlite::Connection;
 
 async fn health_check() -> impl Responder {
@@ -53,6 +54,13 @@ async fn main() -> std::io::Result<()> {
 
     HttpServer::new(move || {
         App::new()
+            .wrap(
+                Cors::default()
+                    .allow_any_origin()
+                    .allow_any_method()
+                    .allow_any_header()
+                    .supports_credentials()
+            )
             .app_data(db_state.clone())
             .route("/health", web::get().to(health_check))
             .route("/api/ping", web::get().to(ping))
