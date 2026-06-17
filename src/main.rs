@@ -33,10 +33,10 @@ use user_handler::{
 
 use reservation_handler::{
     create_reservation,
-    //get_my_reservations,
-    //get_reservation_detail,
+    get_my_reservations,
+    get_reservation_detail,
     cancel_reservation,
-    //extend_reservation,
+    extend_reservation,
 };
 
 use attendance_handler::{
@@ -98,6 +98,9 @@ async fn main() -> std::io::Result<()> {
             // ========== 预约管理接口 ==========
             .route("/api/reservations", web::post().to(create_reservation))
             .route("/api/reservations/{id}", web::delete().to(cancel_reservation))
+            .route("/api/reservations", web::get().to(get_my_reservations))
+            .route("/api/reservations/{id}", web::get().to(get_reservation_detail))
+            .route("/api/reservations/{id}/extend", web::put().to(extend_reservation))
             // ========== 签到签退接口 ==========
             .route("/api/checkin", web::post().to(checkin))
             .route("/api/checkout", web::post().to(checkout))
