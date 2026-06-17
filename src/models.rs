@@ -266,8 +266,17 @@ pub struct Reservation {
 #[derive(Debug, Deserialize)]
 pub struct CreateReservationRequest {
     pub seat_id: i32,
-    pub start_time: String,
+    pub start_time: String,  // ISO 8601 格式，如 "2026-06-20T14:00:00+08:00"
     pub end_time: String,
+}
+
+// 添加预约时间检查响应
+#[derive(Debug, Serialize)]
+pub struct ReservationTimeCheck {
+    pub is_valid: bool,
+    pub message: String,
+    pub max_allowed_date: String,  // 最大允许日期
+    pub min_allowed_date: String,  // 最小允许日期（当天）
 }
 
 #[derive(Debug, Deserialize)]

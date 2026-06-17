@@ -4,6 +4,7 @@ mod user_handler;
 mod seat_handler;
 mod reservation_handler;
 mod attendance_handler;
+mod reservation_validator;
 
 use actix_cors::Cors;
 use actix_web::{web, App, HttpServer, HttpResponse, Responder};
@@ -37,6 +38,9 @@ use reservation_handler::{
     get_reservation_detail,
     cancel_reservation,
     extend_reservation,
+    get_available_dates_api,
+    get_available_time_slots_api,
+    check_reservation_time,
 };
 
 use attendance_handler::{
@@ -105,6 +109,15 @@ async fn main() -> std::io::Result<()> {
             .route("/api/checkin", web::post().to(checkin))
             .route("/api/checkout", web::post().to(checkout))
             .route("/api/attendance/status", web::get().to(get_attendance_status))
+            // ========== 预约管理接口 ==========
+            .route("/api/reservations/dates", web::get().to(get_available_dates_api))           // 获取可用日期
+            .route("/api/reservations/timeslots", web::get().to(get_available_time_slots_api)) // 获取可用时间段
+            .route("/api/reservations/check-time", web::get().to(check_reservation_time))      // 验证时间
+            .route("/api/reservations", web::post().to(create_reservation))
+            .route("/api/reservations", web::get().to(get_my_reservations))
+            .route("/api/reservations/{id}", web::get().to(get_reservation_detail))
+            .route("/api/reservations/{id}", web::delete().to(cancel_reservation))
+            .route("/api/reservations/{id}/extend", web::put().to(extend_reservation))
     })
     .bind("127.0.0.1:8080")?
     .run()

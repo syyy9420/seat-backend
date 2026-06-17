@@ -1,12 +1,17 @@
 // reservation_handler.rs - 完整修复版本
 
 use actix_web::{web, HttpResponse, Responder};
-use chrono::{DateTime, Utc};  // 移除未使用的 Duration
+use chrono::{DateTime, Utc};
 use rusqlite::{Connection, params};
 use std::sync::Mutex;
 
 use crate::models::{
-    ApiResponse, CreateReservationRequest, ExtendReservationRequest, Reservation,
+    ApiResponse, CreateReservationRequest, ExtendReservationRequest, Reservation, ReservationTimeCheck,
+};
+use crate::reservation_validator::{
+    validate_reservation_time,
+    get_available_dates,
+    get_available_time_slots,
 };
 
 /// 创建预约
@@ -514,5 +519,137 @@ pub async fn extend_reservation(
                 data: None,
             })
         }
+    }
+}
+
+/// 获取可用预约日期（三天内）
+pub async fn get_available_dates_api(
+    _db: web::Data<Mutex<Connection>>,
+) -> impl Responder {
+    let dates = get_available_dates();
+    
+    HttpResponse::Ok().json(ApiResponse {
+        success: true,
+        message: format!("可用预约日期（共 {} 天）", dates.len()),
+        data: Some(dates),
+    })
+}
+
+/// 获取指定日期的可用时间段
+pub async fn get_available_time_slots_api(
+    query: web::Query<std::collections::HashMap<String, String>>,
+    db: web::Data<Mutex<Connection>>,
+) -> impl Responder {
+    // 使用 let 绑定创建长期存在的值
+    let default_date = String::new();
+    let date = query.get("date").unwrap_or(&default_date).clone();
+    
+    if date.is_empty() {
+        return HttpResponse::BadRequest().json(ApiResponse::<Vec<String>> {
+            success: false,
+            message: "请提供日期参数".to_string(),
+            data: None,
+        });
+    }
+    
+    // 验证日期是否在三天内
+    let available_dates = get_available_dates();
+    if !available_dates.contains(&date) {
+        return HttpResponse::BadRequest().json(ApiResponse::<Vec<String>> {
+            success: false,
+            message: "日期不在可用范围内（仅支持三天内）".to_string(),
+            data: None,
+        });
+    }
+    
+    let slots = get_available_time_slots(&date);
+    
+    // 获取该日期已被预约的时间段
+    let conn = db.lock().unwrap();
+    let date_start = format!("{}T00:00:00+08:00", date);
+    let date_end = format!("{}T23:59:59+08:00", date);
+    
+    let booked_slots: Vec<String> = match conn.prepare(
+        "SELECT strftime('%H:00', start_time) as slot
+         FROM reservations 
+         WHERE status IN ('pending', 'active')
+         AND start_time >= ?1
+         AND start_time <= ?2
+         GROUP BY slot"
+    ) {
+        Ok(mut stmt) => {
+            let rows = stmt.query_map([&date_start, &date_end], |row| {
+                row.get(0)
+            });
+            match rows {
+                Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+                Err(e) => {
+                    eprintln!("查询已预约时间段失败: {}", e);
+                    vec![]
+                }
+            }
+        },
+        Err(e) => {
+            eprintln!("准备查询失败: {}", e);
+            vec![]
+        }
+    };
+    
+    // 过滤掉已被预约的时间段
+    let available_slots: Vec<String> = slots
+        .into_iter()
+        .filter(|slot| !booked_slots.contains(slot))
+        .collect();
+    
+    HttpResponse::Ok().json(ApiResponse {
+        success: true,
+        message: format!("可用时间段（共 {} 个）", available_slots.len()),
+        data: Some(available_slots),
+    })
+}
+
+/// 验证预约时间
+pub async fn check_reservation_time(
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> impl Responder {
+    // 使用 let 绑定创建长期存在的值
+    let default_start = String::new();
+    let default_end = String::new();
+    
+    let start_time = query.get("start_time").unwrap_or(&default_start);
+    let end_time = query.get("end_time").unwrap_or(&default_end);
+    
+    if start_time.is_empty() || end_time.is_empty() {
+        return HttpResponse::BadRequest().json(ApiResponse::<ReservationTimeCheck> {
+            success: false,
+            message: "请提供开始时间和结束时间".to_string(),
+            data: None,
+        });
+    }
+    
+    let result = validate_reservation_time(start_time, end_time);
+    
+    let now = Utc::now();
+    let max_date = now.date_naive() + chrono::Duration::days(3);
+    
+    let check = ReservationTimeCheck {
+        is_valid: result.is_valid,
+        message: result.message,
+        max_allowed_date: max_date.format("%Y-%m-%d").to_string(),
+        min_allowed_date: now.date_naive().format("%Y-%m-%d").to_string(),
+    };
+    
+    if result.is_valid {
+        HttpResponse::Ok().json(ApiResponse {
+            success: true,
+            message: "时间验证通过".to_string(),
+            data: Some(check),
+        })
+    } else {
+        HttpResponse::BadRequest().json(ApiResponse {
+            success: false,
+            message: "时间验证失败".to_string(),
+            data: Some(check),
+        })
     }
 }
