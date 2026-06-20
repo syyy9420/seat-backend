@@ -22,7 +22,7 @@ pub fn init_db() -> Result<Connection> {
     // 可选：插入一个管理员账号（方便测试）
     conn.execute(
         "INSERT OR IGNORE INTO users (student_id, username, password_hash, email, phone, role, created_at)
-         VALUES ('admin001', '管理员', '$2b$12$2Yq4uQkE5ZvXxV5Yq4uQkE', 'admin@library.com', '13800000000', 'admin', '2024-01-01T00:00:00')",
+         VALUES ('admin001', '管理员', '$2a$12$1mwdd8i1DP3qjs5BkDkJs.IDq5cV2BmNWJIFiSYnp9h8hRQQdsD8e', 'admin@library.com', '13800000000', 'admin', '2024-01-01T00:00:00')",
         [],
     )?;
     
