@@ -30,12 +30,11 @@ fn generate_token(student_id: &str, user_id: i32, role: &str) -> String {
     encode(&Header::default(), &claims, &EncodingKey::from_secret(JWT_SECRET)).unwrap()
 }
 
-/// 1. 用户注册（学生/教师注册账号）
+/// 1. 用户注册
 pub async fn register(
     req: web::Json<RegisterRequest>,
     db: web::Data<Mutex<Connection>>,
 ) -> impl Responder {
-    // 校验输入
     if req.student_id.is_empty() || req.username.is_empty() || req.password.is_empty() || req.email.is_empty() {
         return HttpResponse::BadRequest().json(ApiResponse::<()> {
             success: false,
@@ -60,7 +59,6 @@ pub async fn register(
         });
     }
 
-    // 加密密码
     let hashed = match hash(&req.password, DEFAULT_COST) {
         Ok(h) => h,
         Err(e) => {
@@ -76,7 +74,6 @@ pub async fn register(
     let created_at = Utc::now().to_rfc3339();
     let phone = req.phone.clone().unwrap_or_default();
 
-    // 存入数据库
     let conn = db.lock().unwrap();
     match conn.execute(
         "INSERT INTO users (student_id, username, password_hash, email, phone, role, created_at) 
@@ -201,11 +198,11 @@ pub async fn login(
 
 /// 3. 修改密码
 pub async fn change_password(
+    path: web::Path<String>,
     req: web::Json<ChangePasswordRequest>,
     db: web::Data<Mutex<Connection>>,
-    student_id: web::Path<String>,
 ) -> impl Responder {
-    let student_id = student_id.into_inner();
+    let student_id = path.into_inner();
     let conn = db.lock().unwrap();
 
     let mut stmt = match conn.prepare("SELECT id, password_hash FROM users WHERE student_id = ?1") {
@@ -293,10 +290,10 @@ pub async fn change_password(
 
 /// 4. 获取用户信息（通过学号）
 pub async fn get_user_by_student_id(
-    student_id: web::Path<String>,
+    path: web::Path<String>,
     db: web::Data<Mutex<Connection>>,
 ) -> impl Responder {
-    let student_id = student_id.into_inner();
+    let student_id = path.into_inner();
     let conn = db.lock().unwrap();
 
     let mut stmt = match conn.prepare(
@@ -348,16 +345,15 @@ pub async fn get_user_by_student_id(
     }
 }
 
-/// 5. 更新用户信息（邮箱、电话）- 简化版
+/// 5. 更新用户信息（邮箱、电话）
 pub async fn update_user_info(
-    student_id: web::Path<String>,
+    path: web::Path<String>,
     req: web::Json<UpdateUserRequest>,
     db: web::Data<Mutex<Connection>>,
 ) -> impl Responder {
-    let student_id = student_id.into_inner();
+    let student_id = path.into_inner();
     let conn = db.lock().unwrap();
 
-    // 先检查用户是否存在
     let exists: bool = match conn.query_row(
         "SELECT 1 FROM users WHERE student_id = ?1",
         [&student_id],
@@ -375,7 +371,6 @@ pub async fn update_user_info(
         });
     }
 
-    // 分别处理每个字段的更新
     if let Some(email) = &req.email {
         if let Err(e) = conn.execute(
             "UPDATE users SET email = ?1 WHERE student_id = ?2",
@@ -454,4 +449,100 @@ pub async fn get_all_users(db: web::Data<Mutex<Connection>>) -> impl Responder {
         message: format!("共 {} 位用户", users.len()),
         data: Some(users),
     })
+}
+
+/// 7. 获取当前登录用户信息（通过 Token）
+pub async fn get_current_user(
+    req: actix_web::HttpRequest,
+    db: web::Data<Mutex<Connection>>,
+) -> impl Responder {
+    // 从 Authorization 头中提取 token
+    let auth_header = match req.headers().get("Authorization") {
+        Some(h) => h.to_str().unwrap_or(""),
+        None => {
+            return HttpResponse::Unauthorized().json(ApiResponse::<()> {
+                success: false,
+                message: "缺少 Authorization 头".to_string(),
+                data: None,
+            });
+        }
+    };
+
+    if !auth_header.starts_with("Bearer ") {
+        return HttpResponse::Unauthorized().json(ApiResponse::<()> {
+            success: false,
+            message: "Token 格式错误，应为 Bearer {token}".to_string(),
+            data: None,
+        });
+    }
+
+    let token = &auth_header[7..];
+
+    // 验证 token 并解析用户信息
+    use jsonwebtoken::{decode, DecodingKey, Validation};
+    let key = DecodingKey::from_secret(b"library-seat-reservation-secret-key-2024");
+    let token_data = match decode::<Claims>(token, &key, &Validation::default()) {
+        Ok(data) => data,
+        Err(e) => {
+            eprintln!("Token 验证失败: {}", e);
+            return HttpResponse::Unauthorized().json(ApiResponse::<()> {
+                success: false,
+                message: "Token 无效或已过期".to_string(),
+                data: None,
+            });
+        }
+    };
+
+    let claims = token_data.claims;
+    let student_id = claims.sub;
+
+    // 查询用户信息
+    let conn = db.lock().unwrap();
+    let mut stmt = match conn.prepare(
+        "SELECT id, student_id, username, email, phone, role FROM users WHERE student_id = ?1"
+    ) {
+        Ok(stmt) => stmt,
+        Err(e) => {
+            eprintln!("准备查询失败: {}", e);
+            return HttpResponse::InternalServerError().json(ApiResponse::<UserInfo> {
+                success: false,
+                message: "服务器内部错误".to_string(),
+                data: None,
+            });
+        }
+    };
+
+    let mut rows = match stmt.query([&student_id]) {
+        Ok(rows) => rows,
+        Err(e) => {
+            eprintln!("查询失败: {}", e);
+            return HttpResponse::InternalServerError().json(ApiResponse::<UserInfo> {
+                success: false,
+                message: "服务器内部错误".to_string(),
+                data: None,
+            });
+        }
+    };
+
+    if let Some(row) = rows.next().unwrap() {
+        let user = UserInfo {
+            id: row.get(0).unwrap(),
+            student_id: row.get(1).unwrap(),
+            username: row.get(2).unwrap(),
+            email: row.get(3).unwrap(),
+            phone: row.get(4).unwrap(),
+            role: row.get(5).unwrap(),
+        };
+        HttpResponse::Ok().json(ApiResponse {
+            success: true,
+            message: "获取成功".to_string(),
+            data: Some(user),
+        })
+    } else {
+        HttpResponse::NotFound().json(ApiResponse::<UserInfo> {
+            success: false,
+            message: "用户不存在".to_string(),
+            data: None,
+        })
+    }
 }
